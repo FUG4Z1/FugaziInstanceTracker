@@ -2,6 +2,6 @@
 ## Title: Fugazi Instance Tracker
 ## Notes: Tracks instance lockouts and the 5-per-hour limit, keeps a Ledger and more...
 ## Author: Fugazi
-## Version: 1.7.0
+## Version: 1.7.1
 ## SavedVariables: InstanceTrackerDB
 FugaziInstanceTracker.lua
