@@ -3,7 +3,7 @@
 -- Tracks the 5-instances-per-hour soft cap and saved lockouts.
 -- Categorizes instances by expansion: Classic, TBC, WotLK.
 -- Data is account-wide (5/hr limit is per account).
--- Tracks per-run stats: deaths, gold, items.
+-- Tracks per-run stats: gold, items.
 ----------------------------------------------------------------------
 
 local ADDON_NAME = "InstanceTracker"
@@ -656,7 +656,6 @@ local function StopGPHSession()
             enterTime = gphSession.startTime,
             exitTime = now,
             duration = dur,
-            deaths = 0,
             goldCopper = gold,
             qualityCounts = gphSession.qualityCounts,
             items = itemList,
@@ -703,7 +702,6 @@ local function StartRun(name)
     currentRun = {
         name = name,
         enterTime = time(),
-        deaths = 0,
         goldCopper = 0,
         qualityCounts = {},
         items = {},
@@ -752,7 +750,6 @@ local function FinalizeRun()
         enterTime = currentRun.enterTime,
         exitTime = now,
         duration = now - currentRun.enterTime,
-        deaths = currentRun.deaths,
         goldCopper = currentRun.goldCopper,
         qualityCounts = currentRun.qualityCounts,
         items = itemList,
@@ -2642,7 +2639,7 @@ local function CreateMainFrame()
         self.label:SetText("|cff88ffaaStats|r")
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:AddLine("Run Stats", 0.4, 0.9, 0.5)
-        GameTooltip:AddLine("View duration, gold, deaths,", 0.7, 0.7, 0.7, true)
+        GameTooltip:AddLine("View duration, gold, items.", 0.7, 0.7, 0.7, true)
         GameTooltip:AddLine("items, and more for each run.", 0.7, 0.7, 0.7, true)
         GameTooltip:Show()
     end)
@@ -2977,13 +2974,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 
     elseif event == "UPDATE_INSTANCE_INFO" then
         UpdateLockoutCache(); RefreshUI()
-
-    elseif event == "PLAYER_DEAD" then
-        if currentRun then
-            currentRun.deaths = currentRun.deaths + 1
-            -- Save state when deaths change
-            InstanceTrackerDB.currentRun = currentRun
-        end
 
     elseif event == "BAG_UPDATE" then
         if currentRun then DiffBags() end
