@@ -3270,6 +3270,16 @@ local function CreateGPHFrame()
     f:SetScript("OnHide", function()
         SaveFrameLayout(f, "gphShown", "gphPoint")
     end)
+    f:SetScript("OnShow", function()
+        -- When GPH is shown, scroll so first visible row is the line above hearthstone (saved items above require scrolling up)
+        f.gphScrollToDefaultOnNextRefresh = true
+        -- Defer refresh so frame is fully shown (RefreshGPHUI returns if not IsShown()) and layout is ready
+        local defer = CreateFrame("Frame")
+        defer:SetScript("OnUpdate", function(self)
+            self:SetScript("OnUpdate", nil)
+            if RefreshGPHUI then RefreshGPHUI() end
+        end)
+    end)
     f:SetFrameStrata("DIALOG")
     f:SetFrameLevel(10)
     f.EXPANDED_HEIGHT = 400
@@ -4244,7 +4254,25 @@ local function CreateGPHFrame()
         if gph_elapsed >= 0.5 then
             gph_elapsed = 0
             if self.UpdateGphSummonBtn then self.UpdateGphSummonBtn() end
-            -- No periodic RefreshGPHUI: list updates on BAG_UPDATE and user actions (avoids choppy equipping)
+            -- No full RefreshGPHUI here (list updates on BAG_UPDATE / user actions). Only tick the timer/gold/GPH status so it updates in combat.
+            if gphSession and self.gphStatusCenter then
+                local nowGph = time()
+                local dur = nowGph - gphSession.startTime
+                local liveGold = (GetMoney and GetMoney()) and (GetMoney() - gphSession.startGold) or 0
+                if liveGold < 0 then liveGold = 0 end
+                local gph = dur > 0 and (liveGold / (dur / 3600)) or 0
+                if InstanceTrackerDB.gphCollapsed and self.gphStatusLeft and self.gphStatusRight then
+                    self.gphStatusLeft:SetText("|cffdaa520Gold:|r " .. FormatGold(liveGold))
+                    self.gphStatusCenter:SetText("|cffdaa520Timer:|r |cffffffff" .. FormatTimeMedium(dur) .. "|r")
+                    self.gphStatusRight:SetText("|cffdaa520GPH:|r " .. FormatGold(math.floor(gph)))
+                else
+                    self.statusText:SetText(
+                        "|cffdaa520Gold:|r " .. FormatGold(liveGold)
+                        .. "   |cffdaa520Timer:|r |cffffffff" .. FormatTimeMedium(dur) .. "|r"
+                        .. "   |cffdaa520GPH:|r " .. FormatGold(math.floor(gph))
+                    )
+                end
+            end
             RefreshItemDetailLive()
             -- Bottom bar: FPS left, time center, gold right (latency/ms removed - not reliable on this client)
             if self.gphBottomLeft and self.gphBottomCenter and self.gphBottomRight then
@@ -5207,17 +5235,43 @@ RefreshGPHUI = function()
     end
 
     yOff = yOff + 8
-    content:SetHeight(yOff)
+    -- Invisible bottom spacer so we can always scroll to "hearthstone at top" even with many protected items above
+    local viewHeight = gphFrame.scrollFrame and gphFrame.scrollFrame:GetHeight() or 0
+    local fillerHeight = 0
+    if gphFrame.gphDefaultScrollY and viewHeight > 0 then
+        fillerHeight = math.max(0, gphFrame.gphDefaultScrollY + viewHeight - yOff)
+    end
+    if fillerHeight > 0 then
+        if not gphFrame.gphBottomSpacer then
+            local spacer = CreateFrame("Frame", nil, content)
+            spacer:EnableMouse(false)
+            spacer:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
+            gphFrame.gphBottomSpacer = spacer
+        end
+        local spacer = gphFrame.gphBottomSpacer
+        spacer:SetParent(content)
+        spacer:ClearAllPoints()
+        spacer:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -yOff)
+        spacer:SetSize(SCROLL_CONTENT_WIDTH or 296, fillerHeight)
+        spacer:Show()
+    elseif gphFrame.gphBottomSpacer then
+        gphFrame.gphBottomSpacer:Hide()
+    end
+    content:SetHeight(yOff + fillerHeight)
     -- Do NOT call UpdateScrollChildRect here: on some clients it resets the scroll child position and locks the list.
     if gphFrame.gphScrollBar then
-        local viewHeight = gphFrame.scrollFrame:GetHeight()
+        viewHeight = gphFrame.scrollFrame:GetHeight()
         local contentHeight = content:GetHeight()
         local maxScroll = math.max(0, contentHeight - viewHeight)
         local cur = gphFrame.gphScrollOffset or 0
-        -- When opening GPH, default scroll so the first visible row is the line below hearthstone (whitelisted items above require scrolling up).
-        if gphFrame.gphScrollToDefaultOnNextRefresh and gphFrame.gphDefaultScrollY then
-            cur = math.min(gphFrame.gphDefaultScrollY, maxScroll)
+        -- When opening GPH, default scroll so the first visible row is the divider line above hearthstone (saved items above require scrolling up).
+        if gphFrame.gphScrollToDefaultOnNextRefresh then
             gphFrame.gphScrollToDefaultOnNextRefresh = nil
+            if gphFrame.gphDefaultScrollY then
+                cur = math.min(gphFrame.gphDefaultScrollY, maxScroll)
+            else
+                cur = 0
+            end
         end
         if cur > maxScroll then cur = maxScroll end
         gphFrame.gphScrollOffset = cur
@@ -5263,10 +5317,8 @@ local function ToggleGPHFrame()
             gphFrame.gphSelectedIndex = nil
             gphFrame.gphSelectedRowBtn = nil
             gphFrame.gphSelectedItemLink = nil
-            gphFrame.gphScrollToDefaultOnNextRefresh = true  -- scroll so first visible row is below hearthstone
             gphFrame:Show()
             SaveFrameLayout(gphFrame, "gphShown", "gphPoint")
-            RefreshGPHUI()
         end
 end
 _G.ToggleGPHFrame = ToggleGPHFrame  -- for inventory keybind macro
