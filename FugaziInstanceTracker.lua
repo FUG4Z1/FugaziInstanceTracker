@@ -358,13 +358,13 @@ if not _G.InstanceTrackerGPHToggleButton then
     end)
 end
 
--- Apply key override so bag key triggers our button (hook alone may not run on keypress in 3.3.5)
+-- Apply key override so bag key triggers our button (hook alone may not run on keypress in 3.3.5).
+-- Prefer SecureHandlerClickTemplate button so bag key works in combat; fallback to non-secure button.
 local function ApplyGPHInvKeyOverride(btn)
     if not btn or not InstanceTrackerDB.gphInvKeybind then return end
     local owner = _G.InstanceTrackerKeybindOwner
     if not owner then return end
-    -- Use non-secure toggle button name so /click works in combat (secure /run is often blocked)
-    local btnName = "InstanceTrackerGPHToggleButton"
+    local btnName = (_G.InstanceTrackerGPHCombatToggleBtn and SecureHandlerSetFrameRef) and "InstanceTrackerGPHCombatToggleBtn" or "InstanceTrackerGPHToggleButton"
     if ClearOverrideBindings then ClearOverrideBindings(owner) end
     local keys = {}
     for _, action in next, { "TOGGLEBACKPACK", "OPENALLBAGS" } do
@@ -3350,6 +3350,11 @@ local function CreateGPHFrame()
         GameTooltip:AddLine(InstanceTrackerDB.gphInvKeybind and "Inventory key opens GPH (on)" or "Inventory key opens GPH (off)", 0.9, 0.8, 0.5)
         GameTooltip:AddLine("Autoselling: " .. (InstanceTrackerDB.gphAutoVendor and "|cff44ff44ON|r" or "|cffff4444OFF|r"), 0.9, 0.8, 0.5)
         GameTooltip:AddLine("When on: bag key toggles GPH instead of default bags (like Bagnon)", 0.6, 0.6, 0.5)
+        if _G.InstanceTrackerGPHCombatToggleBtn then
+            GameTooltip:AddLine("Bag key works in combat.", 0.5, 0.5, 0.5)
+        else
+            GameTooltip:AddLine("In combat: use |cffaaffaa/gph|r or click to open", 0.5, 0.5, 0.5)
+        end
         GameTooltip:AddLine("Left-click: Inv key | Right-click: Toggle autoselling", 0.5, 0.5, 0.5, true)
         GameTooltip:Show()
     end
@@ -3408,6 +3413,27 @@ local function CreateGPHFrame()
     invKeybindBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     invKeybindBtn:Hide()
     f.gphInvKeybindBtn = invKeybindBtn
+
+    -- SecureHandlerClickTemplate button: override targets this so bag key works in combat (secure handler can Show/Hide ref'd frame)
+    local combatToggleOk, combatToggleBtn = pcall(CreateFrame, "Button", "InstanceTrackerGPHCombatToggleBtn", keybindOwner, "SecureHandlerClickTemplate")
+    if combatToggleOk and combatToggleBtn then
+        combatToggleBtn:SetSize(1, 1)
+        combatToggleBtn:SetPoint("BOTTOMLEFT", keybindOwner, "BOTTOMLEFT", -10000, -10000)
+        combatToggleBtn:Hide()
+        combatToggleBtn:SetAttribute("_onclick", [=[
+            local gph = self:GetFrameRef("GPHFrame")
+            if gph then
+                if gph:IsShown() then gph:Hide() else gph:Show() end
+            end
+        ]=])
+        if SecureHandlerSetFrameRef then
+            SecureHandlerSetFrameRef(combatToggleBtn, "GPHFrame", f)
+        end
+        f.gphCombatToggleBtn = combatToggleBtn
+        if InstanceTrackerDB.gphInvKeybind and f.gphInvKeybindBtn then
+            ApplyGPHInvKeyOverride(f.gphInvKeybindBtn)
+        end
+    end
 
     -- Close (rightmost)
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
