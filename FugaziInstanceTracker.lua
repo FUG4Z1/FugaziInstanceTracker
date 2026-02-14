@@ -22,6 +22,7 @@ local GPH_MAX_STACK = 49  -- server max stack size; confirm when deleting more t
 InstanceTrackerDB = InstanceTrackerDB or {}
 if InstanceTrackerDB.fitMute == nil then InstanceTrackerDB.fitMute = false end
 if InstanceTrackerDB.gphInvKeybind == nil then InstanceTrackerDB.gphInvKeybind = false end
+if InstanceTrackerDB.gphAutoVendor == nil then InstanceTrackerDB.gphAutoVendor = true end
 if InstanceTrackerDB.gphScale15 == nil then InstanceTrackerDB.gphScale15 = false end
 if InstanceTrackerDB.gphDestroyList == nil then InstanceTrackerDB.gphDestroyList = {} end
 if InstanceTrackerDB.gphPreviouslyWornItemIds == nil then InstanceTrackerDB.gphPreviouslyWornItemIds = {} end
@@ -2232,6 +2233,25 @@ StaticPopupDialogs["INSTANCETRACKER_RENAME_RUN"] = {
     preferredIndex = 3,
 }
 
+StaticPopupDialogs["GPH_AUTOSELL_CONFIRM"] = {
+    text = "Enable autoselling at the Goblin Merchant?\nUnprotected items will be sold automatically when you open the merchant.",
+    button1 = "Yes, enable",
+    button2 = "Cancel",
+    OnAccept = function()
+        InstanceTrackerDB.gphAutoVendor = true
+        local f = _G.InstanceTrackerGPHFrame or gphFrame
+        if f and f.gphInvBtn then
+            local inv = f.gphInvBtn
+            if inv.icon then inv.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01") end
+            if inv.bg then inv.bg:SetTexture(0.2, 0.5, 0.2, 0.8) end
+        end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
 StaticPopupDialogs["INSTANCETRACKER_CLEAR_HISTORY"] = {
     text = "Are you sure you want to clear ALL run history?\nThis cannot be undone.",
     button1 = "Yes, Clear",
@@ -3310,22 +3330,40 @@ local function CreateGPHFrame()
     invIcon:SetTexture("Interface\\Icons\\INV_Misc_Bag_08")
     invBtn.icon = invIcon
     f.gphInvBtn = invBtn
+    invBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     local function UpdateInvBtn()
-        if InstanceTrackerDB.gphInvKeybind then
-            invBtn.bg:SetTexture(0.4, 0.35, 0.2, 0.8)
+        if InstanceTrackerDB.gphAutoVendor then
+            invBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
+            invBtn.bg:SetTexture(0.2, 0.5, 0.2, 0.8)
         else
-            invBtn.bg:SetTexture(0.45, 0.12, 0.1, 0.8)
+            invBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_08")
+            if InstanceTrackerDB.gphInvKeybind then
+                invBtn.bg:SetTexture(0.4, 0.35, 0.2, 0.8)
+            else
+                invBtn.bg:SetTexture(0.45, 0.12, 0.1, 0.8)
+            end
         end
     end
     local function ShowInvTooltip()
         GameTooltip:SetOwner(invBtn, "ANCHOR_BOTTOM")
         GameTooltip:ClearLines()
         GameTooltip:AddLine(InstanceTrackerDB.gphInvKeybind and "Inventory key opens GPH (on)" or "Inventory key opens GPH (off)", 0.9, 0.8, 0.5)
+        GameTooltip:AddLine("Autoselling: " .. (InstanceTrackerDB.gphAutoVendor and "|cff44ff44ON|r" or "|cffff4444OFF|r"), 0.9, 0.8, 0.5)
         GameTooltip:AddLine("When on: bag key toggles GPH instead of default bags (like Bagnon)", 0.6, 0.6, 0.5)
-        GameTooltip:AddLine("Click to toggle", 0.5, 0.5, 0.5, true)
+        GameTooltip:AddLine("Left-click: Inv key | Right-click: Toggle autoselling", 0.5, 0.5, 0.5, true)
         GameTooltip:Show()
     end
-    invBtn:SetScript("OnClick", function()
+    invBtn:SetScript("OnClick", function(_, button)
+        if button == "RightButton" then
+            if InstanceTrackerDB.gphAutoVendor then
+                InstanceTrackerDB.gphAutoVendor = false
+                UpdateInvBtn()
+            else
+                StaticPopup_Show("GPH_AUTOSELL_CONFIRM")
+            end
+            if GameTooltip:GetOwner() == invBtn then ShowInvTooltip() end
+            return
+        end
         InstanceTrackerDB.gphInvKeybind = not InstanceTrackerDB.gphInvKeybind
         if InstanceTrackerDB.gphInvKeybind then
             InstallGPHInvHook()
@@ -3346,8 +3384,13 @@ local function CreateGPHFrame()
         if GameTooltip:GetOwner() == invBtn then ShowInvTooltip() end
     end)
     invBtn:SetScript("OnEnter", function()
-        if InstanceTrackerDB.gphInvKeybind then invBtn.bg:SetTexture(0.5, 0.45, 0.2, 0.9)
-        else invBtn.bg:SetTexture(0.55, 0.2, 0.15, 0.9) end
+        if InstanceTrackerDB.gphAutoVendor then
+            invBtn.bg:SetTexture(0.3, 0.6, 0.3, 0.9)
+        elseif InstanceTrackerDB.gphInvKeybind then
+            invBtn.bg:SetTexture(0.5, 0.45, 0.2, 0.9)
+        else
+            invBtn.bg:SetTexture(0.55, 0.2, 0.15, 0.9)
+        end
         ShowInvTooltip()
     end)
     invBtn:SetScript("OnLeave", function() UpdateInvBtn(); GameTooltip:Hide() end)
@@ -5604,7 +5647,6 @@ eventFrame:RegisterEvent("MERCHANT_CLOSED")
 eventFrame:RegisterEvent("GOSSIP_SHOW")
 eventFrame:RegisterEvent("QUEST_GREETING")
 eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
-
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         if not InstanceTrackerDB.recentInstances then InstanceTrackerDB.recentInstances = {} end
@@ -5735,7 +5777,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         gphNpcDialogTime = GetTime()
         if event == "MERCHANT_SHOW" then
             InstallGphGreedyMuteOnce()
-            StartGphVendorRun()
+            if InstanceTrackerDB.gphAutoVendor then StartGphVendorRun() end
             if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
         end
     elseif event == "MERCHANT_CLOSED" then
