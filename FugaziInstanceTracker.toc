@@ -1,8 +1,0 @@
-## Interface: 30300
-## Title: Fugazi Instance Tracker
-## Notes: LOOT MANAGER, 5/hour instance cap, lockouts, run Ledger (gold/items), GPH tracker, item detail.
-## Author: Fugazi
-## Version: 1.7.2
-## SavedVariables: InstanceTrackerDB
-FugaziInstanceTracker.lua
-FugaziVendorProtect.lua
