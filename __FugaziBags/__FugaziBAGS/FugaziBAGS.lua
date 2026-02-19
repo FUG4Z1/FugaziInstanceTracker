@@ -1094,7 +1094,8 @@ local function CreateGPHFrame()
         local on = _G.FugaziBAGSDB and _G.FugaziBAGSDB.gphAutoVendor
         GameTooltip:AddLine("Autoselling: " .. (on and "|cff44ff44ON|r" or "|cffff4444OFF|r"), 0.9, 0.8, 0.5)
         GameTooltip:AddLine("LMB: Toggle autoselling", 0.6, 0.6, 0.5)
-        GameTooltip:AddLine("RMB: Summon Goblin Merchant", 0.7, 0.7, 0.7, true)
+        GameTooltip:AddLine("RMB: Summon Goblin Merchant", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Hold Shift when opening vendor: no selling this session", 0.5, 0.5, 0.5, true)
         GameTooltip:Show()
     end
     -- Only this button and GPH_AUTOSELL_CONFIRM may change gphAutoVendor. B key only toggles frame.

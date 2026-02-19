@@ -102,6 +102,7 @@ local GPH_SUMMON_DELAY = 1.5
 local gphVendorQueue = {}
 local gphVendorQueueIndex = 1
 local gphVendorRunning = false
+local gphVendorSessionOverride = false  -- true = don't sell this vendor session (set when Shift held at open, cleared on close)
 local gphVendorWorker = CreateFrame("Frame")
 gphVendorWorker:Hide()
 
@@ -229,6 +230,7 @@ end
 
 local function FinishGphVendorRun()
     gphVendorRunning = false
+    gphVendorSessionOverride = false
     gphVendorWorker:Hide()
     if DB.gphSummonGreedy ~= false then
         QueueGphSummonGreedy()
@@ -258,6 +260,8 @@ gphVendorWorker:SetScript("OnUpdate", function(self, elapsed)
         self:Hide()
         return
     end
+    -- Session override: if Shift was held when opening vendor, don't sell this session (until vendor closed).
+    if gphVendorSessionOverride then return end
     local action = gphVendorQueue[gphVendorQueueIndex]
     if not action then
         FinishGphVendorRun()
@@ -289,6 +293,8 @@ local function StartGphVendorRun()
         end
         return
     end
+    -- Capture Shift once at open: if held, no selling this vendor session until you close and reopen.
+    gphVendorSessionOverride = (IsShiftKeyDown and IsShiftKeyDown())
     gphVendorWorker._t = 0
     gphVendorWorker:Show()
 end
