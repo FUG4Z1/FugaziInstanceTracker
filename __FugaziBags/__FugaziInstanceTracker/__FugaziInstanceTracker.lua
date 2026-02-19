@@ -102,19 +102,12 @@ local IT_SKIN = {
 
 local function ApplyInstanceTrackerSkin(f)
     if not f then return end
-    local SV = _G.FugaziBAGSDB
-    if not SV then return end  -- only reskin when __FugaziBAGS is present
-    local val = SV.gphSkin or "original"
-    local skinName
-    if val == "elvui_real" then
-        skinName = "elvui_real"
-    elseif val == "elvui" then
-        skinName = "elvui"
-    elseif val == "pimp_purple" then
-        skinName = "pimp_purple"
-    else
-        skinName = "original"
+    -- Use our own saved skin so we work with or without __FugaziBAGS.
+    local val = InstanceTrackerDB.fitSkin or "original"
+    if val ~= "original" and val ~= "elvui" and val ~= "elvui_real" and val ~= "pimp_purple" then
+        val = "original"
     end
+    local skinName = val
     local s = IT_SKIN[skinName]
     if not s then return end
 
@@ -166,6 +159,7 @@ end
 
 InstanceTrackerDB = InstanceTrackerDB or {}
 if InstanceTrackerDB.fitMute == nil then InstanceTrackerDB.fitMute = false end
+if InstanceTrackerDB.fitSkin == nil then InstanceTrackerDB.fitSkin = "original" end
 if InstanceTrackerDB.gphInvKeybind == nil then InstanceTrackerDB.gphInvKeybind = true end
 -- One-time: ensure B opens Fugazi inventory (was default false; many users expect bags on B)
 if InstanceTrackerDB.gphInvKeybindMigrated ~= true then
@@ -241,230 +235,7 @@ local function IsItemProtectedAPI(itemId, qualityArg)
 end
 _G.FugaziInstanceTracker_IsItemProtected = function(id) return IsItemProtectedAPI(id) end
 
--- GPH Vendor: auto-sell at Goblin Merchant (respects (*) protected), summon Greedy Scavenger, mute Greedy. Standalone implementation.
-local GOBLIN_MERCHANT_NAME = "Goblin Merchant"
-local GREEDY_PET_NAME = "Greedy scavenger"
--- Companion creatureIDs from pet selection frame (what GetCompanionInfo returns for summon slot)
-local GREEDY_PET_ID = 600135
-local GOBLIN_MERCHANT_ID = 600126
-local GPH_SUMMON_DELAY = 1.5
-
-local gphVendorQueue = {}
-local gphVendorQueueIndex = 1
-local gphVendorRunning = false
-local gphVendorWorker = CreateFrame("Frame")
-gphVendorWorker:Hide()
-
-local function BuildGphVendorQueue()
-    wipe(gphVendorQueue)
-    gphVendorQueueIndex = 1
-    for bag = 0, 4 do
-        local slots = GetContainerNumSlots and GetContainerNumSlots(bag) or 0
-        for slot = 1, slots do
-            local itemID = GetContainerItemID and GetContainerItemID(bag, slot)
-            if itemID then
-                local link = GetContainerItemLink and GetContainerItemLink(bag, slot)
-                local _, _, quality
-                if link and GetItemInfo then _, _, quality = GetItemInfo(link) end
-                if quality == nil and GetItemInfo then _, _, quality = GetItemInfo(itemID) end
-                if not IsItemProtectedAPI(itemID, quality) then
-                    local texture, itemCount, locked = GetContainerItemInfo(bag, slot)
-                    if itemCount and itemCount > 0 and not locked then
-                        local sellPrice = GetItemInfo and select(11, GetItemInfo(link or itemID))
-                        if sellPrice and sellPrice > 0 and not (quality == 4) then
-                            gphVendorQueue[#gphVendorQueue + 1] = { type = "sell", bag = bag, slot = slot, itemID = itemID }
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
--- Name-only matching for 3.3.5 (GetCompanionInfo return order/ID can vary by client)
-local function GphCompanionNameIsGreedy(name)
-    if not name or type(name) ~= "string" then return false end
-    local l = name:lower()
-    return l:find("greedy") and l:find("scavenger")
-end
-local function GphCompanionNameIsGoblin(name)
-    if not name or type(name) ~= "string" then return false end
-    local l = name:lower()
-    return l:find("goblin") and l:find("merchant")
-end
-
-local function GphIsGreedySummoned()
-    local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-    for i = 1, num do
-        local cid, cname, spellID, icon, isSummoned = GetCompanionInfo("CRITTER", i)
-        if isSummoned and (cid == GREEDY_PET_ID or GphCompanionNameIsGreedy(cname)) then return true end
-    end
-    return false
-end
-
-local function GphIsGoblinMerchantSummoned()
-    local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-    for i = 1, num do
-        local cid, cname, spellID, icon, isSummoned = GetCompanionInfo("CRITTER", i)
-        if isSummoned and (cid == GOBLIN_MERCHANT_ID or GphCompanionNameIsGoblin(cname)) then return true end
-    end
-    return false
-end
-
---- True if the player has the Greedy scavenger companion (owned, not necessarily summoned).
-local function GphPlayerHasGreedyCompanion()
-    local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-    for i = 1, num do
-        local cid, cname = GetCompanionInfo("CRITTER", i)
-        if cid == GREEDY_PET_ID or (cname and GphCompanionNameIsGreedy(cname)) then return true end
-    end
-    return false
-end
-
-local function QueueGphSummonGreedy()
-    local t = (InstanceTrackerDB.gphSummonDelayTimers or {})
-    InstanceTrackerDB.gphSummonDelayTimers = t
-    t[#t + 1] = { left = GPH_SUMMON_DELAY, func = function()
-        local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-        for i = 1, num do
-            local cid, cname, spellID, icon, isSummoned = GetCompanionInfo("CRITTER", i)
-            if not isSummoned and (cid == GREEDY_PET_ID or GphCompanionNameIsGreedy(cname)) then
-                CallCompanion("CRITTER", i)
-                if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
-                return
-            end
-        end
-    end }
-end
-
-local function DoGphSummonGreedyNow()
-    local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-    for i = 1, num do
-        local cid, cname, spellID, icon, isSummoned = GetCompanionInfo("CRITTER", i)
-        if not isSummoned and (cid == GREEDY_PET_ID or GphCompanionNameIsGreedy(cname)) then
-            CallCompanion("CRITTER", i)
-            if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
-            return
-        end
-    end
-end
-
-local function DoGphSummonGoblinMerchantNow()
-    local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-    for i = 1, num do
-        local cid, cname, spellID, icon, isSummoned = GetCompanionInfo("CRITTER", i)
-        if not isSummoned and (cid == GOBLIN_MERCHANT_ID or GphCompanionNameIsGoblin(cname)) then
-            CallCompanion("CRITTER", i)
-            if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
-            return
-        end
-    end
-end
-
---- Dismiss current critter companion (Greedy or Goblin Merchant). Returns true if one was dismissed.
-local function GphDismissCurrentCompanion()
-    local num = GetNumCompanions and GetNumCompanions("CRITTER") or 0
-    for i = 1, num do
-        local cid, cname, spellID, icon, isSummoned = GetCompanionInfo("CRITTER", i)
-        if isSummoned and (cid == GREEDY_PET_ID or cid == GOBLIN_MERCHANT_ID or GphCompanionNameIsGreedy(cname) or GphCompanionNameIsGoblin(cname)) then
-            CallCompanion("CRITTER", i)
-            if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
-            return true
-        end
-    end
-    return false
-end
-
-local function FinishGphVendorRun()
-    gphVendorRunning = false
-    gphVendorWorker:Hide()
-    if InstanceTrackerDB.gphSummonGreedy ~= false then
-        QueueGphSummonGreedy()
-    end
-end
-
-local gphSummonDelayFrame = CreateFrame("Frame")
-gphSummonDelayFrame:SetScript("OnUpdate", function(self, elapsed)
-    local t = InstanceTrackerDB.gphSummonDelayTimers
-    if not t or #t == 0 then return end
-    for i = #t, 1, -1 do
-        local item = t[i]
-        item.left = item.left - elapsed
-        if item.left <= 0 then
-            table.remove(t, i)
-            if type(item.func) == "function" then pcall(item.func) end
-        end
-    end
-end)
-
-gphVendorWorker:SetScript("OnUpdate", function(self, elapsed)
-    self._t = (self._t or 0) + elapsed
-    if self._t < 0.015 then return end
-    self._t = 0
-    if not MerchantFrame or not MerchantFrame:IsShown() then
-        gphVendorRunning = false
-        self:Hide()
-        return
-    end
-    local action = gphVendorQueue[gphVendorQueueIndex]
-    if not action then
-        FinishGphVendorRun()
-        return
-    end
-    if action.type == "sell" then
-        local link = GetContainerItemLink and GetContainerItemLink(action.bag, action.slot)
-        local _, _, quality
-        if link and GetItemInfo then _, _, quality = GetItemInfo(link) end
-        if quality == nil and GetItemInfo then _, _, quality = GetItemInfo(action.itemID) end
-        if not IsItemProtectedAPI(action.itemID, quality) then
-            UseContainerItem(action.bag, action.slot)
-        end
-    end
-    gphVendorQueueIndex = gphVendorQueueIndex + 1
-end)
-
-local function StartGphVendorRun()
-    if not UnitExists("target") or UnitName("target") ~= GOBLIN_MERCHANT_NAME then return end
-    if not MerchantFrame or not MerchantFrame:IsShown() then return end
-    if gphVendorRunning then return end
-    gphVendorRunning = true
-    BuildGphVendorQueue()
-    if #gphVendorQueue == 0 then
-        gphVendorRunning = false
-        if UnitExists("target") and UnitName("target") == GOBLIN_MERCHANT_NAME and MerchantFrame and MerchantFrame:IsShown() and (InstanceTrackerDB.gphSummonGreedy ~= false) then
-            QueueGphSummonGreedy()
-        end
-        return
-    end
-    gphVendorWorker._t = 0
-    gphVendorWorker:Show()
-end
-
-local gphGreedyMuteInstalled = false
-local function GphGreedyChatFilter(self, event, msg, author, ...)
-    if type(author) ~= "string" then return false end
-    local clean = author:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h", ""):gsub("|h", ""):lower()
-    if clean == GREEDY_PET_NAME:lower() then return true end
-    if type(msg) == "string" and msg:lower():find("greedy scavenger", 1, true) then
-        if msg:lower():find(" says", 1, true) or msg:lower():find(" yells", 1, true) or msg:lower():find(" whispers", 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function GphIsVendorOut()
-    return (MerchantFrame and MerchantFrame:IsShown()) and (UnitExists("target") and UnitName("target") == GOBLIN_MERCHANT_NAME)
-end
-
-local function InstallGphGreedyMuteOnce()
-    if gphGreedyMuteInstalled then return end
-    gphGreedyMuteInstalled = true
-    local events = { "CHAT_MSG_MONSTER_SAY", "CHAT_MSG_MONSTER_YELL", "CHAT_MSG_MONSTER_WHISPER", "CHAT_MSG_MONSTER_EMOTE", "CHAT_MSG_MONSTER_PARTY", "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_TEXT_EMOTE", "CHAT_MSG_EMOTE", "CHAT_MSG_SYSTEM" }
-    for _, ev in ipairs(events) do
-        if ChatFrame_AddMessageEventFilter then ChatFrame_AddMessageEventFilter(ev, GphGreedyChatFilter) end
-    end
-end
+-- GPH vendor/summon/greedy/goblin logic removed: __FugaziBAGS owns autosell and summon Greedy when both addons are loaded.
 
 -- Inv toggle: when on, bag key opens GPH instead of default bags (like Bagnon/OneBag: hook ToggleBackpack/OpenAllBags)
 local origToggleBackpack, origOpenAllBags
@@ -1415,6 +1186,38 @@ local function StopGPHSession()
         end
     end
 end
+
+--- API for __FugaziBAGS: record a GPH session into the InstanceTracker ledger when both addons are loaded.
+--- Called by BAGS when user stops a session from the inventory (play/stop button).
+--- Signature: (startTime, endTime, startGold, goldEarned, itemList, qualityCounts)
+_G.FugaziInstanceTracker_RecordGPHRun = function(startTime, endTime, startGold, goldEarned, itemList, qualityCounts)
+    if not startTime or not endTime or not InstanceTrackerDB then return end
+    local dur = endTime - startTime
+    local run = {
+        name = "GPH" .. (FormatDateTime(startTime) ~= "" and (" - " .. FormatDateTime(startTime)) or ""),
+        enterTime = startTime,
+        exitTime = endTime,
+        duration = dur,
+        goldCopper = goldEarned or 0,
+        qualityCounts = qualityCounts or {},
+        items = itemList or {},
+    }
+    if not InstanceTrackerDB.runHistory then InstanceTrackerDB.runHistory = {} end
+    table.insert(InstanceTrackerDB.runHistory, 1, run)
+    while #InstanceTrackerDB.runHistory > MAX_RUN_HISTORY do
+        table.remove(InstanceTrackerDB.runHistory)
+    end
+    AddonPrint(
+        ColorText("[InstanceTracker] ", 0.4, 0.8, 1)
+        .. "GPH session recorded: " .. FormatTimeMedium(dur)
+        .. " | " .. FormatGoldPlain(goldEarned or 0)
+        .. " |cff44ff44 - Saved to Run Stats history|r"
+    )
+    if statsFrame and statsFrame:IsShown() and type(RefreshStatsUI) == "function" then
+        RefreshStatsUI()
+    end
+end
+
 ----------------------------------------------------------------------
 -- Stats: run tracking helpers
 ----------------------------------------------------------------------
@@ -2417,24 +2220,7 @@ StaticPopupDialogs["INSTANCETRACKER_RENAME_RUN"] = {
     preferredIndex = 3,
 }
 
-StaticPopupDialogs["GPH_AUTOSELL_CONFIRM"] = {
-    text = "Enable autoselling at the Goblin Merchant?\nUnprotected items will be sold automatically when you open the merchant.",
-    button1 = "Yes, enable",
-    button2 = "Cancel",
-    OnAccept = function()
-        InstanceTrackerDB.gphAutoVendor = true
-        local f = _G.InstanceTrackerGPHFrame or gphFrame
-        if f and f.gphInvBtn then
-            local inv = f.gphInvBtn
-            if inv.icon then inv.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01") end
-            if inv.bg then inv.bg:SetTexture(0.2, 0.5, 0.2, 0.8) end
-        end
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-    preferredIndex = 3,
-}
+-- GPH_AUTOSELL_CONFIRM is owned by __FugaziBAGS; do not register it here or it overwrites BAGS's popup and breaks "Yes, enable" (wrong DB + wrong frame).
 
 StaticPopupDialogs["INSTANCETRACKER_CLEAR_HISTORY"] = {
     text = "Are you sure you want to clear ALL run history?\nThis cannot be undone.",
@@ -3521,7 +3307,7 @@ local function CreateGPHFrame()
     local GPH_BTN_W, GPH_BTN_H = 36, 18
     local GPH_BTN_GAP = 2
 
-    -- Order left-to-right: pet, magnifier, bag, (enchant when has profession). Anchors set after sum/scale exist below.
+    -- Order left-to-right: bag (keybind), magnifier (scale). Autosell/summon Greedy are in __FugaziBAGS when that addon is loaded.
     local invBtn = CreateFrame("Button", nil, titleBar)
     invBtn:EnableMouse(true)
     invBtn:SetHitRectInsets(0, 0, 0, 0)
@@ -3540,43 +3326,27 @@ local function CreateGPHFrame()
     f.gphInvBtn = invBtn
     invBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     local function UpdateInvBtn()
-        if InstanceTrackerDB.gphAutoVendor then
-            invBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
-            invBtn.bg:SetTexture(0.2, 0.5, 0.2, 0.8)
+        invBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_08")
+        if InstanceTrackerDB.gphInvKeybind then
+            invBtn.bg:SetTexture(0.4, 0.35, 0.2, 0.8)
         else
-            invBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_08")
-            if InstanceTrackerDB.gphInvKeybind then
-                invBtn.bg:SetTexture(0.4, 0.35, 0.2, 0.8)
-            else
-                invBtn.bg:SetTexture(0.45, 0.12, 0.1, 0.8)
-            end
+            invBtn.bg:SetTexture(0.45, 0.12, 0.1, 0.8)
         end
     end
     local function ShowInvTooltip()
         GameTooltip:SetOwner(invBtn, "ANCHOR_BOTTOM")
         GameTooltip:ClearLines()
         GameTooltip:AddLine(InstanceTrackerDB.gphInvKeybind and "Inventory key opens GPH (on)" or "Inventory key opens GPH (off)", 0.9, 0.8, 0.5)
-        GameTooltip:AddLine("Autoselling: " .. (InstanceTrackerDB.gphAutoVendor and "|cff44ff44ON|r" or "|cffff4444OFF|r"), 0.9, 0.8, 0.5)
         GameTooltip:AddLine("When on: bag key toggles GPH instead of default bags (like Bagnon)", 0.6, 0.6, 0.5)
         if _G.InstanceTrackerGPHCombatToggleBtn then
             GameTooltip:AddLine("Bag key works in combat.", 0.5, 0.5, 0.5)
         else
             GameTooltip:AddLine("In combat: use |cffaaffaa/gph|r or click to open", 0.5, 0.5, 0.5)
         end
-        GameTooltip:AddLine("Left-click: Inv key | Right-click: Toggle autoselling", 0.5, 0.5, 0.5, true)
+        GameTooltip:AddLine("Left-click: Toggle inv key", 0.5, 0.5, 0.5, true)
         GameTooltip:Show()
     end
-    invBtn:SetScript("OnClick", function(_, button)
-        if button == "RightButton" then
-            if InstanceTrackerDB.gphAutoVendor then
-                InstanceTrackerDB.gphAutoVendor = false
-                UpdateInvBtn()
-            else
-                StaticPopup_Show("GPH_AUTOSELL_CONFIRM")
-            end
-            if GameTooltip:GetOwner() == invBtn then ShowInvTooltip() end
-            return
-        end
+    invBtn:SetScript("OnClick", function()
         InstanceTrackerDB.gphInvKeybind = not InstanceTrackerDB.gphInvKeybind
         if InstanceTrackerDB.gphInvKeybind then
             InstallGPHInvHook()
@@ -3597,9 +3367,7 @@ local function CreateGPHFrame()
         if GameTooltip:GetOwner() == invBtn then ShowInvTooltip() end
     end)
     invBtn:SetScript("OnEnter", function()
-        if InstanceTrackerDB.gphAutoVendor then
-            invBtn.bg:SetTexture(0.3, 0.6, 0.3, 0.9)
-        elseif InstanceTrackerDB.gphInvKeybind then
+        if InstanceTrackerDB.gphInvKeybind then
             invBtn.bg:SetTexture(0.5, 0.45, 0.2, 0.9)
         else
             invBtn.bg:SetTexture(0.55, 0.2, 0.15, 0.9)
@@ -3824,12 +3592,14 @@ local function CreateGPHFrame()
         GameTooltip:Hide()
     end)
 
-    -- Scale ×1.5: between pet and bag; magnifying glass icon; reposition frame so button stays under cursor when toggling
+    -- Scale ×1.5: left of bag button; magnifying glass icon
     local scaleBtn = CreateFrame("Button", nil, titleBar)
     scaleBtn:EnableMouse(true)
     scaleBtn:SetHitRectInsets(0, 0, 0, 0)
     scaleBtn:SetSize(22, GPH_BTN_H)
-    scaleBtn:SetPoint("LEFT", invBtn, "RIGHT", GPH_BTN_GAP, 0)
+    scaleBtn:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
+    invBtn:ClearAllPoints()
+    invBtn:SetPoint("LEFT", scaleBtn, "RIGHT", GPH_BTN_GAP, 0)
     local scaleBg = scaleBtn:CreateTexture(nil, "BACKGROUND")
     scaleBg:SetAllPoints()
     scaleBtn.bg = scaleBg
@@ -3868,87 +3638,10 @@ local function CreateGPHFrame()
     scaleBtn:SetScript("OnLeave", function() UpdateScaleBtn(); GameTooltip:Hide() end)
     UpdateScaleBtn()
 
-    -- GPH Vendor (pet): leftmost of the four; order will be pet, magnifier, bag, enchant.
-    if InstanceTrackerDB.gphSummonGreedy == nil then InstanceTrackerDB.gphSummonGreedy = true end
-    local sumBtn = CreateFrame("Button", nil, titleBar)
-    sumBtn:EnableMouse(true)
-    sumBtn:SetHitRectInsets(0, 0, 0, 0)
-    sumBtn:SetSize(22, GPH_BTN_H)
-    sumBtn:SetPoint("LEFT", scaleBtn, "RIGHT", GPH_BTN_GAP, 0)
-    local sumBg = sumBtn:CreateTexture(nil, "BACKGROUND")
-    sumBg:SetAllPoints()
-    sumBtn.bg = sumBg
-    local sumIcon = sumBtn:CreateTexture(nil, "ARTWORK")
-    sumIcon:SetPoint("CENTER")
-    sumIcon:SetSize(GPH_ICON_SZ, GPH_ICON_SZ)
-    sumBtn.icon = sumIcon
-    f.gphSummonBtn = sumBtn
-    local function UpdateGphSummonBtn()
-        local on = InstanceTrackerDB.gphSummonGreedy ~= false
-        if on then
-            sumBg:SetTexture(0.25, 0.4, 0.2, 0.85)
-            sumIcon:SetVertexColor(1, 1, 1)
-            if GphIsGoblinMerchantSummoned() then
-                sumIcon:SetTexture("Interface\\Icons\\achievement_goblinhead")
-            else
-                sumIcon:SetTexture("Interface\\Icons\\inv_harvestgolempet")
-            end
-        else
-            sumBg:SetTexture(0.4, 0.12, 0.1, 0.85)
-            sumIcon:SetVertexColor(1, 0.85, 0.85)
-            sumIcon:SetTexture("Interface\\Icons\\inv_harvestgolempet")
-        end
-    end
-    sumBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    sumBtn:SetScript("OnMouseUp", function(self, button)
-        if button == "RightButton" then
-            -- Always resummon Greedy: if already out, dismiss then summon so spamming RMB resummons (pet catches up when it lags)
-            if GphIsGreedySummoned() then
-                GphDismissCurrentCompanion()
-            end
-            DoGphSummonGreedyNow()
-            if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
-            return
-        end
-        -- LeftButton: toggle auto-summon
-        InstanceTrackerDB.gphSummonGreedy = InstanceTrackerDB.gphSummonGreedy == false
-        UpdateGphSummonBtn()
-        if InstanceTrackerDB.gphSummonGreedy ~= false and not GphIsGreedySummoned() then
-            DoGphSummonGreedyNow()
-        end
-    end)
-    local function ShowGphSummonTooltip()
-        GameTooltip:SetOwner(sumBtn, "ANCHOR_BOTTOM")
-        GameTooltip:ClearLines()
-        GameTooltip:AddLine("LMB: AutoSummon " .. (InstanceTrackerDB.gphSummonGreedy ~= false and "(on)" or "(off)"), 0.9, 0.8, 0.5)
-        GameTooltip:AddLine("RMB: Summon Pet", 0.7, 0.7, 0.7, true)
-        GameTooltip:Show()
-    end
-    sumBtn:SetScript("OnEnter", function()
-        sumBg:SetTexture(0.4, 0.35, 0.2, 0.9)
-        ShowGphSummonTooltip()
-    end)
-    sumBtn:SetScript("OnLeave", function() UpdateGphSummonBtn(); GameTooltip:Hide() end)
-    sumBtn:SetScript("OnUpdate", function(self)
-        if GameTooltip:GetOwner() == self then ShowGphSummonTooltip() end
-    end)
-    f.UpdateGphSummonBtn = UpdateGphSummonBtn
-    UpdateGphSummonBtn()
-
-    -- Left-to-right: pet (if owned), magnifier, bag, (enchant when has DE/Prospect). Hide pet button and shift others left when player doesn't have Greedy.
+    -- Title bar layout: scale (magnifier), then bag (keybind). No summon/autosell here; __FugaziBAGS owns those when loaded.
     local function UpdateGphTitleBarButtonLayout()
-        local hasGreedy = GphPlayerHasGreedyCompanion()
-        if hasGreedy then
-            sumBtn:Show()
-            sumBtn:ClearAllPoints()
-            sumBtn:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
-            scaleBtn:ClearAllPoints()
-            scaleBtn:SetPoint("LEFT", sumBtn, "RIGHT", GPH_BTN_GAP, 0)
-        else
-            sumBtn:Hide()
-            scaleBtn:ClearAllPoints()
-            scaleBtn:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
-        end
+        scaleBtn:ClearAllPoints()
+        scaleBtn:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
         invBtn:ClearAllPoints()
         invBtn:SetPoint("LEFT", scaleBtn, "RIGHT", GPH_BTN_GAP, 0)
     end
@@ -6109,16 +5802,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end
         end
         
-        -- Restore GPH session if it exists
-        if InstanceTrackerDB.gphSession then
-            gphSession = InstanceTrackerDB.gphSession
-            gphBagBaseline = InstanceTrackerDB.gphBagBaseline or {}
-            gphItemsGained = InstanceTrackerDB.gphItemsGained or {}
-            -- Re-snapshot bags (baseline might be stale after reload)
-            gphBagBaseline = ScanBags()
-            gphItemsGained = {}
-        end
-        
+        -- GPH session/vendor/destroy live in __FugaziBAGS; no session restore here.
+
         -- Default layout on reload: lockouts/stats collapsed, GPH expanded so item list is visible
         InstanceTrackerDB.lockoutsCollapsed = true
         InstanceTrackerDB.statsCollapsed = true
@@ -6133,38 +5818,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         RequestRaidInfo()
         if frame:IsShown() then RefreshUI() end
         InstanceTrackerDB.gphDockedToMain = false
-        if _G.InstanceTrackerGPHFrame then gphFrame = _G.InstanceTrackerGPHFrame end
-        if not gphFrame then gphFrame = CreateGPHFrame() end
-        RestoreFrameLayout(gphFrame, "gphShown", "gphPoint")
-        -- Never restore to bank layout (2,-80); apply default so position/scale persist correctly
-        local pt = InstanceTrackerDB.gphPoint
-        local isBankPos = pt and pt.point and pt.x == 2 and pt.y == -80
-        if not (pt and pt.point) or isBankPos then
-            gphFrame:ClearAllPoints()
-            gphFrame:SetPoint("TOP", UIParent, "CENTER", 0, -100)
-            if isBankPos then InstanceTrackerDB.gphPoint = nil end
-        end
-        -- Restore saved scale (InstanceTrackerDB.gphScale15)
-        if InstanceTrackerDB.gphScale15 then gphFrame:SetScale(1.5) else gphFrame:SetScale(1) end
-        if gphFrame.gphScaleBtn and gphFrame.gphScaleBtn.bg then
-            if InstanceTrackerDB.gphScale15 then gphFrame.gphScaleBtn.bg:SetTexture(0.4, 0.35, 0.2, 0.8)
-            else gphFrame.gphScaleBtn.bg:SetTexture(0.28, 0.22, 0.12, 0.7) end
-        end
-        if gphFrame:IsShown() then
-            gphFrame.gphSelectedItemId = nil
-            gphFrame.gphSelectedIndex = nil
-            gphFrame.gphSelectedRowBtn = nil
-            gphFrame.gphSelectedItemLink = nil
-            RefreshGPHUI()
-        end
-        if InstanceTrackerDB.gphInvKeybind then
-            InstallGPHInvHook()
-            if gphFrame and gphFrame.gphInvKeybindBtn then
-                gphFrame.gphInvKeybindBtn:Show()
-                gphFrame.gphInvKeybindBtn:SetAlpha(1)
-                ApplyGPHInvKeyOverride(gphFrame.gphInvKeybindBtn)
-            end
-        end
+        -- GPH/inventory window is owned by __FugaziBAGS; do not create or restore gphFrame here.
+        if InstanceTrackerDB.gphInvKeybind then InstallGPHInvHook() end
         TryHookElvUIBankBags()
         if InstanceTrackerDB.statsShown then
             if not statsFrame then statsFrame = CreateStatsFrame() end
@@ -6230,58 +5885,11 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 
     elseif event == "MERCHANT_SHOW" or event == "GOSSIP_SHOW" or event == "QUEST_GREETING" then
         gphNpcDialogTime = GetTime()
-        if event == "MERCHANT_SHOW" then
-            InstallGphGreedyMuteOnce()
-            if InstanceTrackerDB.gphAutoVendor then StartGphVendorRun() end
-            if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
-        end
     elseif event == "MERCHANT_CLOSED" then
         gphNpcDialogTime = nil
-        gphVendorRunning = false
-        gphVendorWorker:Hide()
-        if gphFrame and gphFrame.UpdateGphSummonBtn then gphFrame.UpdateGphSummonBtn() end
     elseif event == "BAG_UPDATE" then
         if currentRun then DiffBags() end
-        if gphSession then DiffBagsGPH() end
-        if gphFrame and gphFrame:IsShown() then
-            gphFrame._refreshImmediate = true
-            if RefreshGPHUI then RefreshGPHUI() end
-        end
-        if gphFrame and gphFrame.UpdateDestroyMacro then gphFrame.UpdateDestroyMacro() end
-        -- Rebuild destroy queue: every slot that has a destroy-list item (full stack delete per slot, like double-click X)
-        local list = InstanceTrackerDB.gphDestroyList
-        if list then
-            wipe(gphDestroyQueue)
-            for bag = 0, 4 do
-                local numSlots = GetContainerNumSlots and GetContainerNumSlots(bag)
-                if numSlots then
-                    for slot = 1, numSlots do
-                        local id = GetContainerItemID and GetContainerItemID(bag, slot)
-                        if not id and GetContainerItemLink then
-                            local link = GetContainerItemLink(bag, slot)
-                            if link then id = tonumber(link:match("item:(%d+)")) end
-                        end
-                        if id and list[id] then
-                            gphDestroyQueue[#gphDestroyQueue + 1] = { itemId = id, bag = bag, slot = slot }
-                        end
-                    end
-                end
-            end
-            if #gphDestroyQueue > 0 then
-                EnsureGPHDestroyerFrame()
-                if gphDestroyerFrame then gphDestroyerFrame:Show() end
-            end
-        end
-    elseif event == "PLAYER_REGEN_DISABLED" then
-        -- Reparent GPH right-click overlay out of the GPH frame so the window can move in combat (secure child locks the list).
-        if gphFrame and gphFrame.gphRightClickUseOverlay then
-            local ov = gphFrame.gphRightClickUseOverlay
-            ov:SetParent(UIParent)
-            ov:ClearAllPoints()
-            ov:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", -9999, -9999)
-            ov:SetSize(0, 0)
-            ov:Hide()
-        end
+        -- GPH window, destroy list, and vendor/summon live in __FugaziBAGS only.
     end
 end)
 ----------------------------------------------------------------------
@@ -6307,7 +5915,7 @@ SlashCmdList["INSTANCETRACKER"] = function(msg)
         AddonPrint("  |cffaaddff/fit stats|r       Toggle Run Stats (Ledger) window")
         AddonPrint("  |cffaaddff/fit gph|r or |cffaaddff/fit inv|r or |cffaaddff/gph|r  Toggle Gold Per Hour window")
         AddonPrint("  (Bind your bag key to |cffffcc00/fit gph|r or |cffffcc00/gph|r when Inv is on)")
-        AddonPrint("  |cffaaddff/fit vp|r  Show Summon Greedy toggle state")
+        AddonPrint("  |cffaaddff/fit vp|r  Show that autosell/summon are in __FugaziBAGS")
         return
     end
 
@@ -6323,7 +5931,7 @@ SlashCmdList["INSTANCETRACKER"] = function(msg)
 
     if cmd == "vendorprotect" or cmd == "vp" then
         AddonPrint(ColorText("[Fugazi Instance Tracker] ", 0.4, 0.8, 1)
-            .. "Summon Greedy after vendor: " .. (InstanceTrackerDB.gphSummonGreedy ~= false and "|cff44ff44on|r (1.5s)" or "|cffff4444off|r"))
+            .. "Autosell and Summon Greedy are controlled by |cffaaffaa__FugaziBAGS|r (inventory window toggles).")
         return
     end
 
@@ -6386,6 +5994,79 @@ SlashCmdList["INSTANCETRACKER"] = function(msg)
 end
 
 ----------------------------------------------------------------------
+-- Escape menu: Instance Tracker options (skin for lockouts/ledger)
+----------------------------------------------------------------------
+local function CreateInstanceTrackerOptionsPanel()
+    if _G.FugaziInstanceTrackerOptionsPanel then return end
+    local panel = CreateFrame("Frame", "FugaziInstanceTrackerOptionsPanel", UIParent)
+    panel.name = "_Fugazi Instance Tracker"
+    panel.okay = function() end
+    panel.cancel = function() end
+    panel.default = function() end
+    panel.refresh = function() end
+
+    local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -16)
+    title:SetText("_Fugazi Instance Tracker")
+
+    local sub = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -12)
+    sub:SetText("Skin for lockouts and ledger windows:")
+
+    local dropdown = CreateFrame("Frame", "FugaziInstanceTrackerOptionsSkinDropdown", panel, "UIDropDownMenuTemplate")
+    dropdown:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -8)
+    dropdown:SetScale(1)
+    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(dropdown, 180) end
+
+    local function FitSkinMenu_Initialize(_, level)
+        local list = {
+            { value = "original",    text = "Original" },
+            { value = "elvui",       text = "Elvui (Ebonhold)" },
+            { value = "elvui_real",  text = "ElvUI" },
+            { value = "pimp_purple", text = "Pimp Purple" },
+        }
+        for _, opt in ipairs(list) do
+            local info = UIDropDownMenu_CreateInfo and UIDropDownMenu_CreateInfo()
+            if info then
+                info.text = opt.text
+                info.value = opt.value
+                info.checked = (InstanceTrackerDB.fitSkin or "original") == opt.value
+                info.func = function()
+                    InstanceTrackerDB.fitSkin = opt.value
+                    if UIDropDownMenu_SetSelectedValue then UIDropDownMenu_SetSelectedValue(dropdown, opt.value) end
+                    if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, opt.text) end
+                    if _G.InstanceTrackerFrame and _G.InstanceTrackerFrame.ApplySkin then
+                        _G.InstanceTrackerFrame:ApplySkin()
+                    end
+                end
+                UIDropDownMenu_AddButton(info, level or 1)
+            end
+        end
+    end
+
+    if UIDropDownMenu_Initialize then UIDropDownMenu_Initialize(dropdown, FitSkinMenu_Initialize) end
+
+    panel.refresh = function()
+        local val = InstanceTrackerDB.fitSkin or "original"
+        if val ~= "original" and val ~= "elvui" and val ~= "elvui_real" and val ~= "pimp_purple" then
+            val = "original"
+        end
+        local text
+        if val == "elvui" then text = "Elvui (Ebonhold)"
+        elseif val == "elvui_real" then text = "ElvUI"
+        elseif val == "pimp_purple" then text = "Pimp Purple"
+        else text = "Original" end
+        if UIDropDownMenu_SetSelectedValue then UIDropDownMenu_SetSelectedValue(dropdown, val) end
+        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(dropdown, text) end
+        if UIDropDownMenu_Refresh then UIDropDownMenu_Refresh(dropdown, nil, 1) end
+    end
+
+    if InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(panel)
+    end
+end
+
+----------------------------------------------------------------------
 -- Minimap button
 ----------------------------------------------------------------------
 local function CreateMinimapButton()
@@ -6431,11 +6112,10 @@ local function CreateMinimapButton()
         elseif button == "LeftButton" then
             SlashCmdList["INSTANCETRACKER"]("")
         elseif button == "RightButton" then
-            -- Open __FugaziBAGS options panel (Escape menu) if available.
-            if InterfaceOptionsFrame_OpenToCategory and _G.FugaziBAGSOptionsPanel then
-                -- Call twice to work around 3.3.5 interface options bug.
-                InterfaceOptionsFrame_OpenToCategory(_G.FugaziBAGSOptionsPanel)
-                InterfaceOptionsFrame_OpenToCategory(_G.FugaziBAGSOptionsPanel)
+            -- Open our own options panel (skin for lockouts/ledger).
+            if InterfaceOptionsFrame_OpenToCategory and _G.FugaziInstanceTrackerOptionsPanel then
+                InterfaceOptionsFrame_OpenToCategory(_G.FugaziInstanceTrackerOptionsPanel)
+                InterfaceOptionsFrame_OpenToCategory(_G.FugaziInstanceTrackerOptionsPanel)
             end
         end
     end)
@@ -6451,7 +6131,7 @@ local function CreateMinimapButton()
         GameTooltip:AddLine(" ")
         GameTooltip:AddLine("|cff888888Left-click: Toggle window|r")
         GameTooltip:AddLine("|cff888888Ctrl-click: Reset instances|r")
-        GameTooltip:AddLine("|cff888888Right-click: Open _FugaziBAGS options|r")
+        GameTooltip:AddLine("|cff888888Right-click: Open Instance Tracker options|r")
         GameTooltip:AddLine("|cff888888/fit help for commands|r")
         GameTooltip:AddLine("|cff888888Drag: Move around minimap|r")
         GameTooltip:Show()
@@ -6460,5 +6140,8 @@ local function CreateMinimapButton()
 end
 
 eventFrame:HookScript("OnEvent", function(self, event)
-    if event == "PLAYER_LOGIN" then CreateMinimapButton() end
+    if event == "PLAYER_LOGIN" then
+        CreateInstanceTrackerOptionsPanel()
+        CreateMinimapButton()
+    end
 end)
